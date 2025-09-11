@@ -47,7 +47,7 @@ class TheMotherload(nn.Module):
         # We add a 4th dimension to match the expected input of the 2d-CNN
         x = code.unsqueeze(1)
 
-        x = self.dense(x)
+        # x = self.dense(x)
 
         # This will apply the ReLU function for each extracted feature
         conv_outputs = [self.relu(conv(x)) for conv in self.convs]
@@ -88,15 +88,33 @@ class CommitDataset(Dataset):
     def __getitem__(self, idx):
         # print(idx)
         # start_time = time.time()
-        code_snippet = ' '.join(self.code[idx][0]['added_code']) + ' '.join(self.code[idx][0]['removed_code'])
+        length = len(self.code[idx])
+        code_snippet0 = ' '.join(self.code[idx][0]['added_code']) + ' ' +' '.join(self.code[idx][0]['removed_code'])
+        code_snippet1 = ' '
+        code_snippet2 = ' '
+        code_snippet3 = ' '
+        if length >= 4:
+            code_snippet3 = ' '.join(self.code[idx][3]['added_code']) + ' ' +' '.join(self.code[idx][3]['removed_code'])
+        if length >= 3:
+            code_snippet2 = ' '.join(self.code[idx][2]['added_code']) + ' ' +' '.join(self.code[idx][2]['removed_code'])
+        if length >= 2:
+            code_snippet1 = ' '.join(self.code[idx][1]['added_code']) + ' ' +' '.join(self.code[idx][1]['removed_code'])
+
         msg_snippet = self.messages[idx]
 
-        tokenized_code = self.tokenizer(code_snippet, return_tensors='pt', truncation=True, padding='max_length', max_length=512).to(self.device)
+        tokenized_code0 = self.tokenizer(code_snippet0, return_tensors='pt', truncation=True, padding='max_length', max_length=512).to(self.device)
+        tokenized_code1 = self.tokenizer(code_snippet1, return_tensors='pt', truncation=True, padding='max_length', max_length=512).to(self.device)
+        tokenized_code2 = self.tokenizer(code_snippet2, return_tensors='pt', truncation=True, padding='max_length', max_length=512).to(self.device)
+        tokenized_code3 = self.tokenizer(code_snippet3, return_tensors='pt', truncation=True, padding='max_length', max_length=512).to(self.device)
         tokenized_msg = self.tokenizer(msg_snippet, return_tensors='pt', truncation=True, padding='max_length', max_length=512).to(self.device)
 
         with torch.no_grad():
-            embedded_code = self.embedder(**tokenized_code).last_hidden_state.squeeze(0)
+            embedded_code0 = self.embedder(**tokenized_code0).last_hidden_state.squeeze(0)
+            embedded_code1 = self.embedder(**tokenized_code1).last_hidden_state.squeeze(0)
+            embedded_code2 = self.embedder(**tokenized_code2).last_hidden_state.squeeze(0)
+            embedded_code3 = self.embedder(**tokenized_code3).last_hidden_state.squeeze(0)
             embedded_msg = self.embedder(**tokenized_msg).last_hidden_state.squeeze(0)
+        embedded_code = torch.cat([embedded_code0, embedded_code1, embedded_code2, embedded_code3], dim=0)
         label = torch.tensor(self.labels[idx])
         # end_time = time.time()
         # embedtime = end_time - start_time
@@ -136,8 +154,8 @@ if __name__ == '__main__':
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         embedder = AutoModel.from_pretrained(model_name).to(device)
     elif args.model == 'llama':
-        model_name = 'meta-llama/Llama-3.2-3B'
-        embedding_dim = 3072
+        model_name = 'meta-llama/Llama-3.2-1B'
+        embedding_dim = 2048
         # This is a gated model, please save your Hugging Face read-only token in token.txt
         with open('token.txt', 'r') as file:
             auth_token = file.read().strip()
