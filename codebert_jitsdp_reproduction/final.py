@@ -67,19 +67,29 @@ bert_trained_model.eval()
 print('Bert loaded...')
 
 # Eval loop
-all_labels, bert_probs = [], []
+all_labels, bert_probs, bert_logits = [], [], []
 with torch.no_grad():
     for batch_idx, (code_embeddings, msg_embeddings, labels_tensor) in enumerate(bertloader):
         code_embeddings, msg_embeddings, labels = code_embeddings.to(device), msg_embeddings.to(device), labels_tensor.to(device)
         outputs = bert_trained_model(code_embeddings, msg_embeddings)
         probs = torch.sigmoid(outputs)
 
-        # Save the bert logits and the labels 
+        # Save the bert logits and the labels
+        bert_logits.extend(outputs.squeeze().cpu().numpy()) 
         bert_probs.extend(probs.squeeze().cpu().numpy())   
         true_labels = labels.long()
         all_labels.extend(true_labels.cpu().numpy())
 
         print(f"Batch [{batch_idx}/{len(bertloader)}]")
+
+df_bert = pd.DataFrame({
+    "logit": bert_logits,
+    "probability": bert_probs,
+    "label": all_labels
+})
+
+bert_filename = f"bert_logits_and_probs{args.dataset}.csv"
+df_bert.to_csv(bert_filename, index=False)
 
 # Ensure model and memory is dumped
 del bert_trained_model
@@ -99,14 +109,14 @@ print('Bert dropped...')
 with open('token.txt', 'r') as file:
     auth_token = file.read().strip()
 
-llama_model_name = 'meta-llama/Llama-3.2-3B'
+llama_model_name = 'meta-llama/Llama-3.2-1B'
 llama_tokenizer = AutoTokenizer.from_pretrained(llama_model_name, use_auth_token=auth_token)
 llama_embedder = AutoModel.from_pretrained(llama_model_name, use_auth_token=auth_token).to(device)
 llama_tokenizer.add_special_tokens({'pad_token': '[PAD]'})
 llama_embedder.resize_token_embeddings(len(llama_tokenizer))
 llama_dataset = CommitDataset(test_msg, test_code, test_label, llama_tokenizer, llama_embedder, device, llama_model_name)
 llamaloader = DataLoader(llama_dataset, batch_size=64, shuffle=False)
-llama_trained_model = TheMotherload(embedding_dim=3072, output_channels=64, kernel_sizes=[1, 2 ,3], dropout=0.5, model_name='llama')
+llama_trained_model = TheMotherload(embedding_dim=2048, output_channels=64, kernel_sizes=[1, 2 ,3], dropout=0.5, model_name='llama')
 checkpoint = torch.load(best_llama_path)
 llama_trained_model.load_state_dict(checkpoint['model_state_dict'])
 llama_trained_model = llama_trained_model.to(device)
@@ -115,16 +125,26 @@ llama_trained_model.eval()
 print('Llama loaded...')
 
 # Eval loop
-llama_probs = []
+llama_logits, llama_probs = [], []
 with torch.no_grad():
     for batch_idx, (code_embeddings, msg_embeddings, labels_tensor) in enumerate(llamaloader):
         code_embeddings, msg_embeddings, labels = code_embeddings.to(device), msg_embeddings.to(device), labels_tensor.to(device)
         outputs = llama_trained_model(code_embeddings, msg_embeddings)
         probs = torch.sigmoid(outputs)
         # Save the llama logits
+        llama_logits.extend(outputs.squeeze().cpu().numpy())
         llama_probs.extend(probs.squeeze().cpu().numpy())   
 
         print(f"Batch [{batch_idx}/{len(llamaloader)}]")
+
+df_llama = pd.DataFrame({
+    "logit": llama_logits,
+    "probability": llama_probs,
+    "label": all_labels
+})
+
+llama_filename = f"llama_logits_and_probs{args.dataset}.csv"
+df_llama.to_csv(llama_filename, index=False)
 
 # Ensure model and memory is dumped
 del llama_trained_model
@@ -138,11 +158,11 @@ print('Llama dropped...')
 print('Running Wilcoxon...')
 
 # Separate our probabilities based on model and label
-llama_0 = [logit for logit, label in zip(llama_probs, all_labels) if label == 0]
-llama_1 = [logit for logit, label in zip(llama_probs, all_labels) if label == 1]
+llama_0 = [prob for prob, label in zip(llama_probs, all_labels) if label == 0]
+llama_1 = [prob for prob, label in zip(llama_probs, all_labels) if label == 1]
 
-bert_0 = [logit for logit, label in zip(bert_probs, all_labels) if label == 0]
-bert_1 = [logit for logit, label in zip(bert_probs, all_labels) if label == 1]
+bert_0 = [prob for prob, label in zip(bert_probs, all_labels) if label == 0]
+bert_1 = [prob for prob, label in zip(bert_probs, all_labels) if label == 1]
 
 # Save all values where models agree on an output
 bert_0_agree, llama_0_agree, bert_1_agree, llama_1_agree = [],[],[],[]
@@ -156,14 +176,13 @@ for bl1, ll1 in zip(bert_1,llama_1):
         llama_1_agree.append(ll1)
 
 # Run Wilcoxon and save the result
-# On a label of 0, we predict that llama would predict with more confidence in 0, meaning a lower logit. Thus we want to see if Bert > Llama is statistically significant.
-stat_0, p_0 = wilcoxon(bert_0_agree, llama_0_agree, alternative='greater')
-
-# On a label of 1, we predict that llama would predict with more condfidence in 1, meaning a higher logit. Thus we want to see if Llama > Bert is statistically significant.
+# On a given label, we predict that llama would predict with more confidence in 0 or 1. Thus we want to see if Llama > BERT is statistically significant.
+stat_0, p_0 = wilcoxon(llama_0_agree, bert_0_agree, alternative='greater')
 stat_1, p_1 = wilcoxon(llama_1_agree, bert_1_agree, alternative='greater')
 
 # Write model llama name, model bert name, wilcoxon results into csv
 row = [best_bert, best_llama, stat_0, p_0, stat_1, p_1]
+results_filename = f'results{args.dataset}.csv'
 try:
     with open('results.csv', mode='x', newline='') as file:
         writer = csv.writer(file)
